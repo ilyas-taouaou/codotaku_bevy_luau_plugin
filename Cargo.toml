@@ -10,7 +10,9 @@ log = { version = "*", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-mlua = { version = "0.10.0", features = ["luau-jit"] }
+mlua = { version = "0.10.0", features = ["luau-jit", "send"] }
+serde = "1.0.214"
+thiserror = "1.0.68"
 
 [profile.dev]
 opt-level = 1

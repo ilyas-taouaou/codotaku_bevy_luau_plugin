@@ -1459,6 +1459,8 @@ dependencies = [
  "bevy-inspector-egui",
  "log",
  "mlua",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
