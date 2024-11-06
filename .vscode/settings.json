@@ -1,0 +1,5 @@
+{
+    "luau-lsp.types.definitionFiles": [
+        "assets\\scripts\\definition.d.lua"
+    ]
+}

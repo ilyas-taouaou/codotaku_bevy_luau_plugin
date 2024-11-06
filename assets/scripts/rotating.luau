@@ -1,16 +1,39 @@
-local x
+local rotation_direction = math.random(2) == 1 and 1 or -1
 
-if math.round(math.random(0, 1)) == 0 then
-    x = 1
-else
-    x = -1
+function _start(self: Entity, world: World)
+    local transform = world:get_component(self, "Transform")
+    if transform then
+        print("Position", transform.position)
+        print("Rotation", transform.rotation)
+        print("Scale", transform.scale)
+    end
+
+    local mesh = world:add_mesh(Primitive {
+        type = "Cuboid",
+        half_size = vector(0.1, 0.1, 0.1),
+    })
+ 
+    for x = -5, 5 do
+        for z = -5, 5 do
+            local entity = world:new_entity()
+            world:set_components {
+                entity = entity,
+                Transform = Transform {
+                    position = vector(x, math.random(-1.0, 1.0), z),
+                }, 
+                Mesh = mesh,
+            }
+        end
+    end
 end
-
-function start(self)
-    print("Rotating script started")
-    print(self)
-end
-
-function update(self, delta_time)
-    self:rotate(vector(0, x * delta_time, 0))
+ 
+function _update(self: Entity, world: World, delta_time: number)
+    local transform: Transform = world:get_component(self, "Transform")
+    if transform then
+        transform = transform:rotate(vector(0, rotation_direction * delta_time, 0))
+        world:set_components {
+            entity = self,
+            Transform = transform,
+        }
+    end
 end

@@ -1,7 +1,9 @@
 use bevy::prelude::*;
+use lua_objects::{LuaEntity, LuaMesh, LuaTransform, LuaWorld};
 use mlua::prelude::*;
 use script_asset::{ScriptAsset, ScriptAssetLoader};
 
+mod lua_objects;
 mod script_asset;
 
 pub struct ScriptingPlugin {}
@@ -18,6 +20,46 @@ struct ScriptingState {
 impl Plugin for ScriptingPlugin {
     fn build(&self, app: &mut App) {
         let state = ScriptingState { lua: Lua::new() };
+        let globals = state.lua.globals();
+        let transform_constructor = state
+            .lua
+            .create_function(|_lua, properties: LuaTable| {
+                let mut transform = Transform::default();
+
+                if let Ok(position) = properties.get::<LuaVector>("position") {
+                    transform.translation = Vec3::new(position.x(), position.y(), position.z());
+                }
+
+                if let Ok(rotation) = properties.get::<LuaVector>("rotation") {
+                    transform.rotation =
+                        Quat::from_euler(EulerRot::XYZ, rotation.x(), rotation.y(), rotation.z());
+                }
+
+                if let Ok(scale) = properties.get::<LuaVector>("scale") {
+                    transform.scale = Vec3::new(scale.x(), scale.y(), scale.z());
+                }
+
+                Ok(LuaTransform(transform))
+            })
+            .unwrap();
+        let primitive_constructor = state
+            .lua
+            .create_function(|lua, properties: LuaTable| {
+                let name = properties.get::<String>("type").unwrap();
+                match name.as_str() {
+                    "Cuboid" => {
+                        let half_size = properties.get::<LuaVector>("half_size").unwrap();
+                        let half_size = Vec3::new(half_size.x(), half_size.y(), half_size.z());
+                        let mesh = LuaMesh::new(Mesh::from(Cuboid { half_size }));
+                        Ok(mesh)
+                    }
+                    _ => Err(mlua::Error::RuntimeError("Unknown primitive".to_string())),
+                }
+            })
+            .unwrap();
+
+        globals.set("Transform", transform_constructor).unwrap();
+        globals.set("Primitive", primitive_constructor).unwrap();
         app.insert_non_send_resource(state)
             .init_asset::<ScriptAsset>()
             .init_asset_loader::<ScriptAssetLoader>()
@@ -42,32 +84,6 @@ impl ScriptComponent {
     }
 }
 
-struct LuaSelf<'world> {
-    world: &'world mut World,
-    entity: Entity,
-}
-
-impl<'world> LuaSelf<'world> {
-    fn new(world: &'world mut World, entity: Entity) -> Self {
-        LuaSelf { world, entity }
-    }
-}
-
-impl LuaUserData for LuaSelf<'_> {
-    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("rotate", |_, this, vector: LuaVector| {
-            let mut transform = this.world.get_mut::<Transform>(this.entity).unwrap();
-            transform.rotate(Quat::from_euler(
-                EulerRot::XYZ,
-                vector.x(),
-                vector.y(),
-                vector.z(),
-            ));
-            Ok(())
-        });
-    }
-}
-
 fn run_scripts(world: &mut World) {
     let scripting_state = world.remove_non_send_resource::<ScriptingState>().unwrap();
     let script_assets = world.remove_resource::<Assets<ScriptAsset>>().unwrap();
@@ -86,8 +102,6 @@ fn run_scripts(world: &mut World) {
 
     for (entity, code) in running_entities {
         if let Some(code) = code {
-            let lua_self = LuaSelf::new(world, entity);
-
             let lua = &scripting_state.lua;
 
             let environent = lua.create_table().unwrap();
@@ -96,17 +110,19 @@ fn run_scripts(world: &mut World) {
                 .for_each(|key: LuaValue, value: LuaValue| environent.set(key, value))
                 .unwrap();
 
+            lua.sandbox(true).unwrap();
             lua.load(code)
                 .set_environment(environent.clone())
                 .exec()
                 .unwrap();
-            let start = environent.get::<LuaFunction>("start").unwrap();
+            let start = environent.get::<LuaFunction>("_start").unwrap();
 
             lua.scope(|scope| {
-                let lua_self = scope.create_userdata(lua_self).unwrap();
-                start.call::<()>(lua_self)
+                let lua_world = scope.create_userdata(LuaWorld::new(world)).unwrap();
+                start.call::<()>((LuaEntity(entity), lua_world))
             })
             .unwrap();
+            lua.sandbox(false).unwrap();
 
             world.entity_mut(entity).insert(RunningScript {
                 environment: environent,
@@ -130,15 +146,17 @@ fn update_scripts(world: &mut World) {
     }
 
     for (entity, environment) in running_entities {
-        let lua_self = LuaSelf::new(world, entity);
-
         let lua = &scripting_state.lua;
+        let update = environment.get::<LuaFunction>("_update").unwrap();
+
+        lua.sandbox(true).unwrap();
+
         lua.scope(|scope| {
-            let update = environment.get::<LuaFunction>("update").unwrap();
-            let lua_self = scope.create_userdata(lua_self).unwrap();
-            update.call::<()>((lua_self, time.delta_seconds()))
+            let lua_world = scope.create_userdata(LuaWorld::new(world)).unwrap();
+            update.call::<()>((LuaEntity(entity), lua_world, time.delta_seconds()))
         })
         .unwrap();
+        lua.sandbox(false).unwrap();
     }
 
     world.insert_resource(time);
